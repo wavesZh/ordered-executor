@@ -18,28 +18,6 @@ abstract class RingBufferFields<E> extends RingBufferPad {
 	 * 0: pre publish 1: publish over 2. consume over
 	 */
 	protected AtomicInteger flag = new AtomicInteger(2);
-	//	private static final long REF_ARRAY_BASE;
-	//	private static final int REF_ELEMENT_SHIFT;
-	//
-	//	static
-	//	{
-	//		final int scale = UNSAFE.arrayIndexScale(Object[].class);
-	//		if (4 == scale)
-	//		{
-	//			REF_ELEMENT_SHIFT = 2;
-	//		}
-	//		else if (8 == scale)
-	//		{
-	//			REF_ELEMENT_SHIFT = 3;
-	//		}
-	//		else
-	//		{
-	//			throw new IllegalStateException("Unknown pointer size");
-	//		}
-	//		BUFFER_PAD = 128 / scale;
-	//		// Including the buffer pad in the array base offset
-	//		REF_ARRAY_BASE = UNSAFE.arrayBaseOffset(Object[].class) + (BUFFER_PAD << REF_ELEMENT_SHIFT);
-	//	}
 
 
 	protected RingBufferFields(int bufferSize) {
@@ -142,10 +120,7 @@ public final class RingBuffer<E> extends RingBufferFields<E> {
 				} catch (InterruptedException e) {
 					e.printStackTrace();
 				}
-			} else if (tail.compareAndSet(current, next)) {
-				while (!flag.compareAndSet(2, 0)) {
-
-				}
+			} else if (flag.compareAndSet(2, 0) && tail.compareAndSet(current, next)) {
 				break;
 			}
 		} while (true);
