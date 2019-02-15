@@ -37,32 +37,4 @@ public class EventHolder<T> {
 	public void setSequence(long sequence) {
 		this.sequence = sequence;
 	}
-
-
-	public static void main(String[] args) {
-
-		ExecutorService executorService = newSingleThreadExecutor();
-		Future<?> future = executorService.submit(() -> {
-			System.out.println("over");
-			try {
-				Thread.sleep(2000);
-			} catch (InterruptedException e) {
-				e.printStackTrace();
-			}
-			System.out.println("end");
-		});
-		for (;;) {
-			if (future.isDone()) {
-				System.out.println("main over");
-				break;
-			} else {
-				System.out.println("wait");
-				try {
-					Thread.sleep(500);
-				} catch (InterruptedException e) {
-					e.printStackTrace();
-				}
-			}
-		}
-	}
 }

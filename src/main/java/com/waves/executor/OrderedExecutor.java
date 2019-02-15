@@ -2,45 +2,55 @@ package com.waves.executor;
 
 import com.waves.ringbuffer.RingBuffer;
 
+import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.*;
 
 /**
  * @author taozhang
  */
-public class OrderedExecutor extends ThreadPoolExecutor {
+public class OrderedExecutor {
 
-	private static interface Relation<RID> {
+	private interface Relation<RID> {
 		RID getId();
 	}
 
 
 	public static abstract class OrderdRunnable<RID> implements Runnable, Relation<RID> {
-		/**
-		 * 绑定线程， 线程的名称
-		 */
-		private String dispatcher;
-
-		public String getDispatcher() {
-			return dispatcher;
-		}
-
-		public void setDispatcher(String dispatcher) {
-			this.dispatcher = dispatcher;
-		}
 	}
 
 	/**
+	 *
 	 * 限制了消费者数量， 每个ringbuffer只能由一个线程消费。无锁。
 	 */
 	private RingBuffer[] ringBuffers;
 
-
 	private Map<RingBuffer, Future> futureMap;
+
+	private ExecutorService[] executorServices;
+
+
+	public OrderedExecutor(int disruptorNum, int ringBufferNum, int bufferSize) {
+		// executor数量需要跟ringbuffers数量一致
+		executorServices = new ExecutorService[ringBufferNum];
+		for (int i=0; i<ringBufferNum; i++) {
+			executorServices[i] = Executors.newSingleThreadExecutor();
+		}
+		initRingBuffers(ringBufferNum, bufferSize);
+		futureMap = new HashMap<>(ringBufferNum);
+		startUpDispatcher(disruptorNum);
+	}
+
+	private void initRingBuffers(int ringBufferNum, int bufferSize) {
+		ringBuffers = new RingBuffer[ringBufferNum];
+		for (int i = 0; i < ringBufferNum; i++) {
+			ringBuffers[i] = new RingBuffer(bufferSize);
+		}
+	}
 
 	/**
 	 * 提交任务.
-	 * 其实也可以考虑使用多个single thread pool： 正在执行task，就把task放入queue中。
+	 * 其实也可以考虑使用多个single thread pool： thread正在处理，就把task放入queue中。
 	 * @param task
 	 */
 	public void submit(OrderdRunnable<Object> task) {
@@ -48,8 +58,6 @@ public class OrderedExecutor extends ThreadPoolExecutor {
 		RingBuffer ringBuffer = selectRingBuffer(rid);
 		ringBuffer.publish(task);
 
-//		ExecutorService executor = Executors.newSingleThreadExecutor();
-//		executor.submit(task);
 	}
 
 	private RingBuffer selectRingBuffer(Object rid) {
@@ -61,46 +69,43 @@ public class OrderedExecutor extends ThreadPoolExecutor {
 	}
 
 	/**
-	 * 单线程分发任务。
-	 * // TODO: 2019-02-14 可配置多个dispatcher
+	 * 分发任务。
+	 *
+	 * @param num dispatcher的数量
 	 */
-	private void startUpDispatcher() {
-		new Thread(()->{
-			for (;;) {
-				try {
-					for (RingBuffer ringBuffer : ringBuffers) {
-						Future future = futureMap.get(ringBuffer);
-						if(future.isDone()) {
-							Runnable task = (Runnable) ringBuffer.get();
-							this.submit(task);
-						} else {
-//							System.out.println("");
+	private void startUpDispatcher(int num) {
+
+		for (int i = 0; i < num; i++) {
+			int finalI = i;
+			new Thread(() -> {
+				for (; ;) {
+					try {
+						int index = finalI;
+						while (index < ringBuffers.length) {
+							RingBuffer ringBuffer = ringBuffers[index];
+							Future future = futureMap.get(ringBuffer);
+
+							if (future == null || future.isDone()) {
+								Object object = ringBuffer.get();
+								if (object != null) {
+									OrderdRunnable orderdRunnable = (OrderdRunnable) object;
+									Object id = orderdRunnable.getId();
+									System.out.println(Thread.currentThread().getName() + " : " + id);
+									Runnable task = (Runnable) object;
+									future = executorServices[getHashId(id)].submit(task);
+									futureMap.put(ringBuffer, future);
+								}
+							} else {
+
+							}
+							index += num;
 						}
+					} catch (Throwable t) {
+
 					}
-				} catch (Throwable t) {
-
 				}
-			}
-		}).start();
-	}
+			}, "dispatcher-" + finalI + "-" + this.hashCode()).start();
 
-	public OrderedExecutor(int corePoolSize, int maximumPoolSize, long keepAliveTime, TimeUnit unit,
-			BlockingQueue<Runnable> workQueue) {
-		super(corePoolSize, maximumPoolSize, keepAliveTime, unit, workQueue);
-	}
-
-	public OrderedExecutor(int corePoolSize, int maximumPoolSize, long keepAliveTime, TimeUnit unit,
-			BlockingQueue<Runnable> workQueue, ThreadFactory threadFactory) {
-		super(corePoolSize, maximumPoolSize, keepAliveTime, unit, workQueue, threadFactory);
-	}
-
-	public OrderedExecutor(int corePoolSize, int maximumPoolSize, long keepAliveTime, TimeUnit unit,
-			BlockingQueue<Runnable> workQueue, RejectedExecutionHandler handler) {
-		super(corePoolSize, maximumPoolSize, keepAliveTime, unit, workQueue, handler);
-	}
-
-	public OrderedExecutor(int corePoolSize, int maximumPoolSize, long keepAliveTime, TimeUnit unit,
-			BlockingQueue<Runnable> workQueue, ThreadFactory threadFactory, RejectedExecutionHandler handler) {
-		super(corePoolSize, maximumPoolSize, keepAliveTime, unit, workQueue, threadFactory, handler);
+		}
 	}
 }

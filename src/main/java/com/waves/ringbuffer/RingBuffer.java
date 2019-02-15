@@ -2,6 +2,7 @@ package com.waves.ringbuffer;
 
 
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 abstract class RingBufferPad {
@@ -13,6 +14,10 @@ abstract class RingBufferFields<E> extends RingBufferPad {
 	protected final int bufferSize;
 	// head： current consume    tail: current product
 	protected AtomicLong head, tail;
+	/**
+	 * 0: pre publish 1: publish over 2. consume over
+	 */
+	protected AtomicInteger flag = new AtomicInteger(2);
 	//	private static final long REF_ARRAY_BASE;
 	//	private static final int REF_ELEMENT_SHIFT;
 	//
@@ -88,15 +93,30 @@ public final class RingBuffer<E> extends RingBufferFields<E> {
 		EventHolder<E> holder = elementAt(sequence);
 		holder.setSequence(sequence);
 		holder.setEvent(event);
+		while (!flag.compareAndSet(0 ,1)) {
+
+		}
+//		System.out.println("publish : " + this.hashCode() + " next :  " + sequence + "   " + event);
 	}
 
-
+	/**
+	 * // TODO: 2019-02-15
+	 * @return
+	 */
 	public E get() {
-		if (tail.get() <= head.get()) {
+		// TODO: 2019-02-15 并发问题 当tail>head时， 不一定及时将数据放入，导致取旧数据
+		// TODO: 或者head + 1 时并还未拿到event，publish进行了覆盖， 丢失数据。
+		if (!flag.compareAndSet(1, 1) || tail.get() <= head.get()) {
 			return null;
 		}
-		long next = head.incrementAndGet();
-		return elementAt(next).getEvent();
+		long next = 0;
+		next = head.incrementAndGet();
+		E event = elementAt(next).getEvent();
+		while (!flag.compareAndSet(1, 2)) {
+
+		}
+//		System.out.println("get: " + this.hashCode() + " next: "  + next  + " " + event);
+		return event;
 	}
 
 	/**
@@ -117,7 +137,15 @@ public final class RingBuffer<E> extends RingBufferFields<E> {
 			// 生产快于消费，将发生绕圈覆盖
 			if (wrapPoint > head.get()) {
 				// wait or throw exception or discard slice
+				try {
+					Thread.sleep(100);
+				} catch (InterruptedException e) {
+					e.printStackTrace();
+				}
 			} else if (tail.compareAndSet(current, next)) {
+				while (!flag.compareAndSet(2, 0)) {
+
+				}
 				break;
 			}
 		} while (true);
