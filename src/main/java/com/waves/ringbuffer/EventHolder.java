@@ -1,11 +1,5 @@
 package com.waves.ringbuffer;
 
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
-import java.util.concurrent.ThreadPoolExecutor;
-
-import static java.util.concurrent.Executors.*;
 
 public class EventHolder<T> {
 

@@ -1,7 +1,8 @@
 package com.waves.ringbuffer;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
-import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -18,20 +19,28 @@ abstract class RingBufferFields<E> extends RingBufferPad {
 	 * 0: pre publish 1: publish over 2. consume over
 	 */
 	protected AtomicInteger flag = new AtomicInteger(2);
+	protected final int[] availableRead;
+	protected final int[] availableWrite;
 
+	protected ReadWriteLock lock;
 
 	protected RingBufferFields(int bufferSize) {
 		this.bufferSize = bufferSize;
-		// TODO: 2018/12/7
 		entries = new EventHolder[bufferSize];
+		availableWrite = new int[bufferSize];
+		availableRead = new int[bufferSize];
 		fill();
 		head = new AtomicLong(-1);
 		tail = new AtomicLong(-1);
+		this.lock = new ReadWriteLock(0);
 	}
+
 
 	private void fill() {
 		for (int i = 0; i < bufferSize; i++) {
 			entries[i] = new EventHolder<>();
+			availableRead[i] = -1;
+			availableWrite[i] = -1;
 		}
 	}
 
@@ -40,29 +49,39 @@ abstract class RingBufferFields<E> extends RingBufferPad {
 		long index = sequence % bufferSize;
 		return entries[(int) index];
 	}
+
+
+	protected final void setAvailable(final long sequence, boolean read) {
+		int index = (int) (sequence % bufferSize);
+		int flag = (int) (sequence / bufferSize);
+		int[] availableBuffers = read ? availableRead : availableWrite;
+		availableBuffers[index] = flag;
+	}
+
+	protected final boolean isAvailable(final long sequence, boolean read) {
+		if (sequence == 0 && !read) {
+			return true;
+		}
+		int index = (int) (sequence % bufferSize);
+		int flag = (int) (sequence / bufferSize);
+		int[] availableBuffers = read ? availableWrite : availableRead;
+		return availableBuffers[index] == (read ? flag : flag - 1);
+	}
 }
 
 public final class RingBuffer<E> extends RingBufferFields<E> {
 
 	protected long p1, p2, p3, p4, p5, p6, p7;
 
+	private static final Logger LOGGER = LoggerFactory.getLogger(ReadWriteLock.class);
 
 	public RingBuffer(int bufferSize) {
 		super(bufferSize);
 	}
 
-	public void publish(List<E> events) {
-
-		long next = next(events.size());
-		long start = next - (events.size() - 1);
-
-		for (long i = start; start < next; start++) {
-			publish(events.get((int) i), i);
-		}
-	}
-
 	public void publish(E event) {
 		long next = next(1);
+		lock.lockWrite();
 		publish(event, next);
 	}
 
@@ -71,10 +90,9 @@ public final class RingBuffer<E> extends RingBufferFields<E> {
 		EventHolder<E> holder = elementAt(sequence);
 		holder.setSequence(sequence);
 		holder.setEvent(event);
-		while (!flag.compareAndSet(0 ,1)) {
-
-		}
-//		System.out.println("publish : " + this.hashCode() + " next :  " + sequence + "   " + event);
+		setAvailable(sequence, false);
+		lock.unlockWrite();
+		LOGGER.debug("publish the task[{}] to the ringbuffer[{}] in sequence[{}]", event, this.hashCode(), sequence);
 	}
 
 	/**
@@ -84,16 +102,23 @@ public final class RingBuffer<E> extends RingBufferFields<E> {
 	public E get() {
 		// TODO: 2019-02-15 并发问题 当tail>head时， 不一定及时将数据放入，导致取旧数据
 		// TODO: 或者head + 1 时并还未拿到event，publish进行了覆盖， 丢失数据。
-		if (!flag.compareAndSet(1, 1) || tail.get() <= head.get()) {
+		if (tail.get() <= head.get()) {
 			return null;
 		}
-		long next = 0;
-		next = head.incrementAndGet();
-		E event = elementAt(next).getEvent();
-		while (!flag.compareAndSet(1, 2)) {
 
+		long next;
+		while(true) {
+			long l = head.get();
+			next = l + 1;
+			if (isAvailable(next, true) && head.compareAndSet(l, next)) {
+				break;
+			}
 		}
-//		System.out.println("get: " + this.hashCode() + " next: "  + next  + " " + event);
+		lock.lockRead();
+		E event = elementAt(next).getEvent();
+		setAvailable(next, true);
+		lock.unlockRead();
+		LOGGER.debug("get the task[{}] to the ringbuffer[{}] in sequence[{}]", event, this.hashCode(), next);
 		return event;
 	}
 
@@ -120,7 +145,7 @@ public final class RingBuffer<E> extends RingBufferFields<E> {
 				} catch (InterruptedException e) {
 					e.printStackTrace();
 				}
-			} else if (flag.compareAndSet(2, 0) && tail.compareAndSet(current, next)) {
+			} else if (isAvailable(next, false) && tail.compareAndSet(current, next)) {
 				break;
 			}
 		} while (true);

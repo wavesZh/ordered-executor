@@ -90,7 +90,6 @@ public class OrderedExecutor {
 								if (object != null) {
 									OrderdRunnable orderdRunnable = (OrderdRunnable) object;
 									Object id = orderdRunnable.getId();
-									System.out.println(Thread.currentThread().getName() + " : " + id);
 									Runnable task = (Runnable) object;
 									future = executorServices[getHashId(id)].submit(task);
 									futureMap.put(ringBuffer, future);
@@ -101,7 +100,8 @@ public class OrderedExecutor {
 							index += num;
 						}
 					} catch (Throwable t) {
-
+						// nop
+						t.printStackTrace();
 					}
 				}
 			}, "dispatcher-" + finalI + "-" + this.hashCode()).start();
